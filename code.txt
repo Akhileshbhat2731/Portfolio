@@ -1,0 +1,599 @@
+import React, {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+} from "react";
+import type { RefObject } from "react";
+import {
+  motion,
+  useAnimationFrame,
+  useMotionValue,
+  useReducedMotion,
+  useSpring,
+  useTransform,
+  useVelocity,
+} from "motion/react";
+import type { MotionStyle, MotionValue, SpringOptions } from "motion/react";
+
+type PathAlignment =
+  | "none"
+  | "xMinYMin"
+  | "xMidYMin"
+  | "xMaxYMin"
+  | "xMinYMid"
+  | "xMidYMid"
+  | "xMaxYMid"
+  | "xMinYMax"
+  | "xMidYMax"
+  | "xMaxYMax";
+
+type PreserveAspectRatio =
+  | PathAlignment
+  | `${Exclude<PathAlignment, "none">} ${"meet" | "slice"}`;
+
+type CSSVariableInterpolation = {
+  property: `--${string}` | string;
+  from: number | string;
+  to: number | string;
+};
+
+export type MarqueeAlongSvgPathProps = {
+  children: React.ReactNode;
+  className?: string;
+  path: string;
+  pathId?: string;
+  preserveAspectRatio?: PreserveAspectRatio;
+  showPath?: boolean;
+  width?: string | number;
+  height?: string | number;
+  viewBox?: string;
+  baseVelocity?: number;
+  direction?: "normal" | "reverse";
+  easing?: (progress: number) => number;
+  slowdownOnHover?: boolean;
+  slowDownFactor?: number;
+  slowDownSpringConfig?: SpringOptions;
+  useScrollVelocity?: boolean;
+  scrollAwareDirection?: boolean;
+  scrollSpringConfig?: SpringOptions;
+  scrollContainer?: RefObject<HTMLElement | null> | HTMLElement | null;
+  repeat?: number;
+  draggable?: boolean;
+  dragSensitivity?: number;
+  dragVelocityDecay?: number;
+  dragAwareDirection?: boolean;
+  grabCursor?: boolean;
+  enableRollingZIndex?: boolean;
+  zIndexBase?: number;
+  zIndexRange?: number;
+  cssVariableInterpolation?: CSSVariableInterpolation[];
+  responsive?: boolean;
+};
+
+type MovingItemProps = {
+  child: React.ReactNode;
+  itemIndex: number;
+  total: number;
+  repeatedCopy: boolean;
+  path: string;
+  baseOffset: MotionValue<number>;
+  easing?: (progress: number) => number;
+  rollingZIndex: boolean;
+  zIndexBase: number;
+  zIndexRange: number;
+  cssVariables: CSSVariableInterpolation[];
+  draggable: boolean;
+  grabCursor: boolean;
+  onHoverChange: (hovered: boolean) => void;
+};
+
+const loop = (value: number) => ((value % 100) + 100) % 100;
+
+const parseCssValue = (value: string) => {
+  const match = value.trim().match(/^(-?(?:\d+\.?\d*|\.\d+))(.*)$/);
+  return match ? { value: Number(match[1]), unit: match[2] } : null;
+};
+
+function MovingItem({
+  child,
+  itemIndex,
+  total,
+  repeatedCopy,
+  path,
+  baseOffset,
+  easing,
+  rollingZIndex,
+  zIndexBase,
+  zIndexRange,
+  cssVariables,
+  draggable,
+  grabCursor,
+  onHoverChange,
+}: MovingItemProps) {
+  const itemRef = useRef<HTMLDivElement>(null);
+  const rawProgress = useTransform(baseOffset, (value) =>
+    loop(value + (itemIndex * 100) / total),
+  );
+  const easedProgress = useTransform(rawProgress, (value) => {
+    const normalized = value / 100;
+    return (easing ? easing(normalized) : normalized) * 100;
+  });
+  const offsetDistance = useTransform(easedProgress, (value) => `${value}%`);
+  const zIndex = useTransform(easedProgress, (value) =>
+    Math.floor(zIndexBase + (value / 100) * zIndexRange),
+  );
+
+  useEffect(() => {
+    const updateVariables = (progress: number) => {
+      const element = itemRef.current;
+      if (!element) return;
+      const amount = progress / 100;
+
+      cssVariables.forEach(({ property, from, to }) => {
+        const start = typeof from === "number" ? { value: from, unit: "" } : parseCssValue(from);
+        const end = typeof to === "number" ? { value: to, unit: "" } : parseCssValue(to);
+        const value =
+          start && end && start.unit === end.unit
+            ? `${start.value + (end.value - start.value) * amount}${start.unit}`
+            : amount < 0.5
+              ? String(from)
+              : String(to);
+        element.style.setProperty(property, value);
+      });
+    };
+
+    updateVariables(easedProgress.get());
+    return easedProgress.on("change", updateVariables);
+  }, [cssVariables, easedProgress]);
+
+  return (
+    <motion.div
+      ref={itemRef}
+      aria-hidden={repeatedCopy || undefined}
+      className="svg-marquee-item"
+      onPointerEnter={() => onHoverChange(true)}
+      onPointerLeave={() => onHoverChange(false)}
+      style={
+        {
+          offsetPath: `path("${path}")`,
+          offsetDistance,
+          zIndex: rollingZIndex ? zIndex : undefined,
+          cursor: draggable && grabCursor ? "grab" : undefined,
+        } as MotionStyle
+      }
+    >
+      {child}
+    </motion.div>
+  );
+}
+
+export function MarqueeAlongSvgPath({
+  children,
+  className = "",
+  path,
+  pathId,
+  preserveAspectRatio = "xMidYMid meet",
+  showPath = false,
+  width = "100%",
+  height = "100%",
+  viewBox = "0 0 100 100",
+  baseVelocity = 5,
+  direction = "normal",
+  easing,
+  slowdownOnHover = false,
+  slowDownFactor = 0.3,
+  slowDownSpringConfig = { damping: 50, stiffness: 400 },
+  useScrollVelocity = false,
+  scrollAwareDirection = false,
+  scrollSpringConfig = { damping: 50, stiffness: 400 },
+  scrollContainer,
+  repeat = 3,
+  draggable = false,
+  dragSensitivity = 0.2,
+  dragVelocityDecay = 0.96,
+  dragAwareDirection = false,
+  grabCursor = false,
+  enableRollingZIndex = true,
+  zIndexBase = 1,
+  zIndexRange = 10,
+  cssVariableInterpolation = [],
+  responsive = false,
+}: MarqueeAlongSvgPathProps) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const baseOffset = useMotionValue(0);
+  const scrollPosition = useMotionValue(0);
+  const hoverTarget = useMotionValue(1);
+  const smoothHover = useSpring(hoverTarget, slowDownSpringConfig);
+  const scrollVelocity = useVelocity(scrollPosition);
+  const smoothScrollVelocity = useSpring(scrollVelocity, scrollSpringConfig);
+  const reducedMotion = useReducedMotion();
+  const generatedId = useId().replace(/:/g, "");
+  const svgPathId = pathId ?? `moving-path-${generatedId}`;
+
+  const dragging = useRef(false);
+  const dragSpeed = useRef(0);
+  const directionSign = useRef(direction === "normal" ? 1 : -1);
+  const lastPointer = useRef({ x: 0, y: 0, time: 0 });
+
+  const viewBoxValues = useMemo(() => {
+    const values = viewBox.trim().split(/[ ,]+/).map(Number);
+    return {
+      width: Number.isFinite(values[2]) ? values[2] : 100,
+      height: Number.isFinite(values[3]) ? values[3] : 100,
+    };
+  }, [viewBox]);
+
+  const items = useMemo(() => {
+    const original = React.Children.toArray(children);
+    return Array.from({ length: Math.max(1, repeat) }, (_, copy) =>
+      original.map((child, index) => ({
+        child,
+        copy,
+        key: `${copy}-${index}`,
+      })),
+    ).flat();
+  }, [children, repeat]);
+
+  useEffect(() => {
+    directionSign.current = direction === "normal" ? 1 : -1;
+  }, [direction]);
+
+  useEffect(() => {
+    const supplied =
+      scrollContainer && "current" in scrollContainer
+        ? scrollContainer.current
+        : scrollContainer;
+    const target: HTMLElement | Window = supplied ?? window;
+    const readScroll = () => {
+      scrollPosition.set(
+        target === window
+          ? window.scrollY
+          : (target as HTMLElement).scrollTop,
+      );
+    };
+
+    readScroll();
+    target.addEventListener("scroll", readScroll, { passive: true });
+    return () => target.removeEventListener("scroll", readScroll);
+  }, [scrollContainer, scrollPosition]);
+
+  useEffect(() => {
+    if (!responsive) return;
+    const wrapper = wrapperRef.current;
+    const stage = stageRef.current;
+    if (!wrapper || !stage) return;
+
+    const resize = () => {
+      const scale = Math.min(
+        wrapper.clientWidth / viewBoxValues.width,
+        wrapper.clientHeight / viewBoxValues.height,
+      );
+      const left = (wrapper.clientWidth - viewBoxValues.width * scale) / 2;
+      const top = (wrapper.clientHeight - viewBoxValues.height * scale) / 2;
+
+      stage.style.width = `${viewBoxValues.width}px`;
+      stage.style.height = `${viewBoxValues.height}px`;
+      stage.style.transform = `translate3d(${left}px, ${top}px, 0) scale(${scale})`;
+      stage.style.transformOrigin = "top left";
+    };
+
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, [responsive, viewBoxValues]);
+
+  useAnimationFrame((_, delta) => {
+    const frameSeconds = Math.min(delta, 64) / 1000;
+
+    if (dragging.current) return;
+
+    if (Math.abs(dragSpeed.current) > 0.01) {
+      baseOffset.set(baseOffset.get() + dragSpeed.current * frameSeconds);
+      dragSpeed.current *= Math.pow(
+        dragVelocityDecay,
+        delta / (1000 / 60),
+      );
+      return;
+    }
+
+    if (reducedMotion) return;
+
+    const scrollSpeed = useScrollVelocity
+      ? smoothScrollVelocity.get() / 1000
+      : 0;
+    if (scrollAwareDirection && Math.abs(scrollSpeed) > 0.02) {
+      directionSign.current = scrollSpeed > 0 ? 1 : -1;
+    }
+
+    const boost = useScrollVelocity ? 1 + Math.min(5, Math.abs(scrollSpeed) * 5) : 1;
+    const movement =
+      directionSign.current *
+      baseVelocity *
+      frameSeconds *
+      smoothHover.get() *
+      boost;
+    baseOffset.set(baseOffset.get() + movement);
+  });
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggable) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragging.current = true;
+    dragSpeed.current = 0;
+    lastPointer.current = {
+      x: event.clientX,
+      y: event.clientY,
+      time: performance.now(),
+    };
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggable || !dragging.current) return;
+    const now = performance.now();
+    const deltaX = event.clientX - lastPointer.current.x;
+    const deltaY = event.clientY - lastPointer.current.y;
+    const distance = Math.hypot(deltaX, deltaY);
+    const dominantDelta = Math.abs(deltaX) >= Math.abs(deltaY) ? deltaX : -deltaY;
+    const step = Math.sign(dominantDelta || 1) * distance * dragSensitivity;
+    const elapsed = Math.max(8, now - lastPointer.current.time);
+
+    baseOffset.set(baseOffset.get() + step);
+    dragSpeed.current = (step / elapsed) * 1000;
+    if (dragAwareDirection && Math.abs(step) > 0.01) {
+      directionSign.current = Math.sign(step);
+    }
+    lastPointer.current = { x: event.clientX, y: event.clientY, time: now };
+  };
+
+  const stopDragging = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggable) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragging.current = false;
+  };
+
+  const setHovered = (hovered: boolean) => {
+    hoverTarget.set(hovered && slowdownOnHover ? slowDownFactor : 1);
+  };
+
+  return (
+    <div
+      ref={wrapperRef}
+      className={`svg-marquee ${className}`.trim()}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={stopDragging}
+      onPointerCancel={stopDragging}
+      style={{ touchAction: draggable ? "none" : undefined }}
+    >
+      <div
+        ref={stageRef}
+        className="svg-marquee-stage"
+        style={
+          responsive
+            ? undefined
+            : { width, height }
+        }
+      >
+        <svg
+          aria-hidden="true"
+          className="svg-marquee-guide"
+          width={width}
+          height={height}
+          viewBox={viewBox}
+          preserveAspectRatio={preserveAspectRatio}
+        >
+          <path
+            id={svgPathId}
+            d={path}
+            fill="none"
+            stroke={showPath ? "currentColor" : "none"}
+          />
+        </svg>
+
+        {items.map(({ child, copy, key }, index) => (
+          <MovingItem
+            key={key}
+            child={child}
+            itemIndex={index}
+            total={items.length}
+            repeatedCopy={copy > 0}
+            path={path}
+            baseOffset={baseOffset}
+            easing={easing}
+            rollingZIndex={enableRollingZIndex}
+            zIndexBase={zIndexBase}
+            zIndexRange={zIndexRange}
+            cssVariables={cssVariableInterpolation}
+            draggable={draggable}
+            grabCursor={grabCursor}
+            onHoverChange={setHovered}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const demoCards = [
+  { icon: "✦", title: "Create", text: "Shape a fresh idea", color: "#1689fe" },
+  { icon: "♫", title: "Listen", text: "Find your focus", color: "#ff5a66" },
+  { icon: "↗", title: "Launch", text: "Share your work", color: "#111827" },
+  { icon: "✓", title: "Organize", text: "Keep plans clear", color: "#19a974" },
+];
+
+export default function App() {
+  return (
+    <main className="demo-page">
+      <style>{`
+        * { box-sizing: border-box; }
+        html, body, #root { width: 100%; height: 100%; }
+        body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+        button, input, textarea, select { font: inherit; }
+
+        .demo-page {
+          width: 100%;
+          height: 100dvh;
+          overflow: hidden;
+          background: #fff;
+          color: #111827;
+        }
+
+        .demo-shell {
+          position: relative;
+          width: 100%;
+          height: 100%;
+          overflow: hidden;
+          border: 0;
+          border-radius: 0;
+          background: #fff;
+          box-shadow: none;
+        }
+
+        .demo-copy {
+          position: absolute;
+          z-index: 20;
+          inset: 50% auto auto 50%;
+          width: min(520px, 76%);
+          text-align: center;
+          transform: translate(-50%, -50%);
+          pointer-events: none;
+        }
+
+        .demo-kicker {
+          margin: 0 0 12px;
+          color: #1689fe;
+          font-size: 12px;
+          font-weight: 800;
+          letter-spacing: .16em;
+          text-transform: uppercase;
+        }
+
+        .demo-copy h1 {
+          margin: 0;
+          font-size: clamp(36px, 6vw, 74px);
+          line-height: .96;
+          letter-spacing: -.065em;
+        }
+
+        .demo-copy p:last-child {
+          margin: 18px auto 0;
+          max-width: 390px;
+          color: #667085;
+          font-size: clamp(14px, 1.8vw, 17px);
+          line-height: 1.55;
+        }
+
+        .svg-marquee {
+          position: absolute;
+          inset: 0;
+          user-select: none;
+        }
+
+        .svg-marquee-stage {
+          position: relative;
+          contain: layout style;
+        }
+
+        .svg-marquee-guide {
+          display: block;
+          width: 100%;
+          height: 100%;
+          color: rgba(22, 137, 254, .18);
+        }
+
+        .svg-marquee-item {
+          position: absolute;
+          top: 0;
+          left: 0;
+          will-change: offset-distance;
+          backface-visibility: hidden;
+          transform: translateZ(0);
+        }
+
+        .demo-card {
+          width: 168px;
+          height: 116px;
+          margin: -58px 0 0 -84px;
+          overflow: hidden;
+          border: 1px solid rgba(17, 24, 39, .08);
+          border-radius: 22px;
+          background: rgba(255,255,255,.92);
+          box-shadow: 0 18px 40px rgba(32,51,78,.15);
+          backdrop-filter: blur(14px);
+          padding: 16px;
+        }
+
+        .demo-card-icon {
+          display: grid;
+          place-items: center;
+          width: 34px;
+          height: 34px;
+          margin-bottom: 10px;
+          border-radius: 10px;
+          background: var(--card-color);
+          color: white;
+          font-size: 17px;
+          font-weight: 800;
+        }
+
+        .demo-card strong, .demo-card span { display: block; }
+        .demo-card strong { font-size: 14px; letter-spacing: -.02em; }
+        .demo-card span { margin-top: 3px; color: #8a94a6; font-size: 11px; }
+
+        @media (max-width: 640px) {
+          .demo-shell { min-height: 500px; }
+          .demo-copy { width: 82%; }
+          .demo-card { width: 132px; height: 96px; margin: -48px 0 0 -66px; padding: 13px; border-radius: 18px; }
+          .demo-card-icon { width: 28px; height: 28px; margin-bottom: 7px; font-size: 14px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .demo-card { backdrop-filter: none; }
+        }
+      `}</style>
+
+      <section className="demo-shell">
+        <div className="demo-copy">
+          <p className="demo-kicker">Interactive path</p>
+          <h1>Ideas in motion.</h1>
+          <p>Drag the cards, scroll the page, or simply watch them follow the path.</p>
+        </div>
+
+        <MarqueeAlongSvgPath
+          path="M 95 360 C 95 105 330 60 560 60 C 790 60 1025 105 1025 360 C 1025 615 790 660 560 660 C 330 660 95 615 95 360 Z"
+          viewBox="0 0 1120 720"
+          baseVelocity={3.5}
+          repeat={2}
+          responsive
+          draggable
+          grabCursor
+          dragAwareDirection
+          slowdownOnHover
+          slowDownFactor={0.16}
+          useScrollVelocity
+          scrollAwareDirection
+          cssVariableInterpolation={[
+            { property: "--path-progress", from: 0, to: 1 },
+          ]}
+        >
+          {demoCards.map((card) => (
+            <article
+              className="demo-card"
+              key={card.title}
+              style={{ "--card-color": card.color } as React.CSSProperties}
+            >
+              <div className="demo-card-icon">{card.icon}</div>
+              <strong>{card.title}</strong>
+              <span>{card.text}</span>
+            </article>
+          ))}
+        </MarqueeAlongSvgPath>
+      </section>
+    </main>
+  );
+}
